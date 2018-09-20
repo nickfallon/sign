@@ -1,0 +1,99 @@
+//digital sign + verify module for Node
+
+
+/*
+This REST API lets you digitally sign a document, binary, PDF or any other payload that can be encoded and POSTed over HTTP.
+It uses SHA256 hashing and elliptic curve ed25519, the same crypto algorithm that the altcoins Sia and Monero use.
+Example CURL statements are provided for each endpoint.
+To use:
+- Generate a key pair by doing a GET generate_keypair(). This returns a secret key (SK) and a public key (PK). 
+- Take some data that you want to sign, and generate a hash from it by POSTing to hash().
+- 'Digitally signing' means creating a signature object. Call sign() passing the sk and hash. You can sign anything directly
+  without hashing it first, but it's common practice just to sign hashes since the hash directly represents the original data
+  and it's faster to sign a hash than a large binary payload. You can always prove the hash is valid later by re-hashing the
+  original document to compare with your hash.
+  sign() returns a signature. Save the document, the PK and the signature together.
+- Later, any party who has the document, the PK and the signature can call verify() and independently verify that the keypair owner
+  (the holder of the SK) signed the document. If the signature is genuine, verify() will return true.
+  
+  Only the owner of the SK could have signed the document - if a fake signature is used, or the hash has been tampered with, 
+  or the wrong PK is presented, verify() will return false. 
+  The PK represents an identity. Only the SK owner can produce signatures that are valid for this PK. 
+  The hash represents a document. For practical purposes, only the original document can produce the hash.
+  
+*/
+
+var elliptic = require('elliptic');
+var curve = elliptic.curves['ed25519'];
+var ecdsa = new elliptic.ec(curve);
+var CryptoJS = require("crypto-js");
+
+module.exports = {
+
+    generate_keypair: () => (req, res) => {	   
+
+        /*
+        
+            example use:
+            curl localhost:8080/docs-payments/v1/sign/keygen
+            example output:
+            {"sk":"028655b3820de8a756c7626491d35e157890b76029a3ddbe6614c16baf04c914","pk":"044e08a2804cddd25996046dc928b44a9a9c9fe266b22fa5b37f99a1fda62ffe9e4c6ad0245494d94e8807745fa14ae7902f8e8531ea433d65ef2af67f194f27bd"}
+        */
+
+        //generate a ecdsa keypair using ed25519 curve
+        var keys = ecdsa.genKeyPair();
+        var pk = keys.getPublic('hex');
+        var sk = keys.getPrivate('hex');
+        res.send(JSON.stringify({ 'sk': sk, 'pk': pk }));
+    },
+
+    hash: () => (req, res) => {	
+
+        /*
+            example use:
+            curl localhost:8080/docs-payments/v1/sign/hash -H "Content-Type: application/json" -X POST  -d '{ "msg": "hello world" }'
+            example output:
+            {"hash":"9ddefe4435b21d901439e546d54a14a175a3493b9fd8fbf38d9ea6d3cbf70826"}
+            
+        */
+
+        //create a SHA256 hash from the input msg data
+        var msg = req.body.msg;
+        res.json( { hash: CryptoJS.SHA256(JSON.stringify(msg)).toString() } );
+    },
+
+    sign: () => (req, res) => {	    
+
+        /*
+            example use:
+            curl localhost:8080/docs-payments/v1/sign/sign -H "Content-Type: application/json" -X POST  -d '{ "hash": "9ddefe4435b21d901439e546d54a14a175a3493b9fd8fbf38d9ea6d3cbf70826", "sk" : "028655b3820de8a756c7626491d35e157890b76029a3ddbe6614c16baf04c914" }'
+            example output:
+            {"signature":"3044022008abde5152e5d7a6c13a300f388ff0eae4c8f9f5772f923f23cc3fca85e64e02022002aec92ad0b41d3707aa7b3e9a4e314b7bf8c37f3e5d0a958674bfedffdce436"}
+            
+        */
+
+        //generate a signature. sign using the input sk      
+        var hash = req.body.hash;
+        var sk = req.body.sk;        
+        var signature = ecdsa.sign(hash, sk).toDER('hex');
+        res.json({ signature: signature });
+    },
+
+    verify: () => (req, res) => {	
+
+        /*
+            example use:
+            curl localhost:8080/docs-payments/v1/sign/verify -H "Content-Type: application/json" -X POST  -d '{ "hash": "9ddefe4435b21d901439e546d54a14a175a3493b9fd8fbf38d9ea6d3cbf70826", "signature" : "3044022008abde5152e5d7a6c13a300f388ff0eae4c8f9f5772f923f23cc3fca85e64e02022002aec92ad0b41d3707aa7b3e9a4e314b7bf8c37f3e5d0a958674bfedffdce436", "pk": "044e08a2804cddd25996046dc928b44a9a9c9fe266b22fa5b37f99a1fda62ffe9e4c6ad0245494d94e8807745fa14ae7902f8e8531ea433d65ef2af67f194f27bd" }'
+            example output;
+            {"valid":true}
+        */
+
+        //verify a signature using a hash of the original message, the signature and pk of the signer
+        var hash = req.body.hash;
+        var signature = req.body.signature;
+        var pk = req.body.pk;
+        var isValid = ecdsa.verify(hash, signature, pk, 'hex');
+        res.json( {valid: isValid} );
+    }
+
+}
